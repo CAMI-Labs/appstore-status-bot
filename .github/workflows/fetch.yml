@@ -17,11 +17,11 @@ jobs:
           node-version: 18.x
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "2.7"
-      - run: gem install bundler:2.1.4
+          ruby-version: "3.4.2"
+      - run: gem install bundler:2.4.22
       - run: bundle install
       - run: npm install
-      - run: gem install fastlane -v '2.219.0'
+      - run: gem install fastlane -v '2.222.0'
       - run: node Sources/check_status.js
         env:
           PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
