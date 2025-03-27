@@ -1,44 +1,70 @@
-const slack = require("./slack.js");
-const discord = require("./discord.js");
-const exec = require("child_process").exec;
-const dirty = require("dirty");
-const { Octokit, App } = require("octokit");
-const request = require("request-promise-native");
-const { prependOnceListener } = require("process");
-const fs = require("fs").promises;
-const env = Object.create(process.env);
-const octokit = new Octokit({ auth: `token ${process.env.GH_TOKEN}` });
+import axios from "axios";
+import { exec } from "child_process";
+import dirty from "dirty";
+import { promises as fs } from "fs";
+import { Octokit } from "octokit";
 
-const main = async () => {
-  await getGist();
+import * as discord from "./discord.js";
+import * as env from "./env.js";
+import * as slack from "./slack.js";
 
-  exec(
-    "ruby Sources/fetch_app_status.rb",
-    { env: env },
-    function (err, stdout, stderr) {
-      if (stdout) {
-        var apps = JSON.parse(stdout);
-        console.log(apps);
-        for (let app of apps) {
-          checkVersion(app);
-        }
-      } else {
-        console.log("There was a problem fetching the status of the app!");
-        console.log(stderr);
-      }
-    }
-  );
+const octokit = new Octokit({ auth: `token ${env.GH_TOKEN}` });
+const gist_id = env.GIST_ID;
+
+const getGist = async () => {
+  const gists = await octokit.rest.gists
+    .get({ gist_id })
+    .catch((error) => console.error(`[*] Unable to update gist\n${error}`));
+  if (!gists) {
+    return;
+  }
+
+  const filename = Object.keys(gists.data.files)[0];
+  const rawdataURL = gists.data.files[filename].raw_url;
+
+  const response = await axios.get(rawdataURL);
+  try {
+    // Convert response.data to a string before writing
+    const data =
+      typeof response.data === "object"
+        ? JSON.stringify(response.data)
+        : response.data;
+
+    await fs.writeFile("store.db", data);
+    console.debug("[*] file saved!");
+  } catch (error) {
+    console.error(error);
+  }
+};
+
+const updateGist = async (content) => {
+  const gists = await octokit.rest.gists
+    .get({ gist_id })
+    .catch((error) => console.error(`[*] Unable to update gist\n${error}`));
+  if (!gists) {
+    return;
+  }
+
+  const filename = Object.keys(gists.data.files)[0];
+  await octokit.rest.gists.update({
+    gist_id,
+    files: {
+      [filename]: {
+        content,
+      },
+    },
+  });
 };
 
 const checkVersion = async (app) => {
-  var appInfoKey = "appInfo-" + app.appID;
-  var submissionStartKey = "submissionStart" + app.appID;
+  const appInfoKey = "appInfo-" + app.appID;
+  const submissionStartKey = "submissionStart" + app.appID;
 
   const db = dirty("store.db");
   db.on("load", async function () {
-    var lastAppInfo = db.get(appInfoKey);
+    const lastAppInfo = db.get(appInfoKey);
     if (!lastAppInfo || lastAppInfo.status != app.status) {
-      console.log("[*] status is different");
+      console.debug("[*] status is different");
 
       slack.post(app, db.get(submissionStartKey));
       discord.post(app, db.get(submissionStartKey));
@@ -47,7 +73,7 @@ const checkVersion = async (app) => {
         db.set(submissionStartKey, new Date());
       }
     } else {
-      console.log("[*] status is same");
+      console.error("[*] status is same");
     }
 
     db.set(appInfoKey, app);
@@ -56,52 +82,30 @@ const checkVersion = async (app) => {
       const data = await fs.readFile("store.db", "utf-8");
       await updateGist(data);
     } catch (error) {
-      console.log(error);
+      console.error(error);
     }
   });
 };
 
-const getGist = async () => {
-  const gist = await octokit.rest.gists
-    .get({
-      gist_id: process.env.GIST_ID,
-    })
-    .catch((error) => console.error(`[*] Unable to update gist\n${error}`));
-  if (!gist) return;
+const main = async () => {
+  await getGist();
 
-  const filename = Object.keys(gist.data.files)[0];
-  const rawdataURL = gist.data.files[filename].raw_url;
-
-  const options = {
-    url: rawdataURL,
-  };
-
-  const result = await request.get(options);
-  try {
-    await fs.writeFile("store.db", result);
-    console.log("[*] file saved!");
-  } catch (error) {
-    console.log(error);
-  }
-};
-
-const updateGist = async (content) => {
-  const gist = await octokit.rest.gists
-    .get({
-      gist_id: process.env.GIST_ID,
-    })
-    .catch((error) => console.error(`[*] Unable to update gist\n${error}`));
-  if (!gist) return;
-
-  const filename = Object.keys(gist.data.files)[0];
-  await octokit.rest.gists.update({
-    gist_id: process.env.GIST_ID,
-    files: {
-      [filename]: {
-        content: content,
-      },
+  exec(
+    "ruby Sources/fetch_app_status.rb",
+    { env },
+    function (_error, stdout, stderr) {
+      if (stdout) {
+        const apps = JSON.parse(stdout);
+        console.debug(apps);
+        for (const app of apps) {
+          checkVersion(app);
+        }
+      } else {
+        console.error("There was a problem fetching the status of the app!");
+        console.error(stderr);
+      }
     },
-  });
+  );
 };
 
 main();
